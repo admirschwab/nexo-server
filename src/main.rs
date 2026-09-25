@@ -4,19 +4,15 @@ mod routes;
 mod state;
 
 use axum::{
-    routing::{get, post},
+    routing::{any, get, post},
     Router,
 };
 use functions::database::init_database;
-use routes::{
-    auth::{create_challenge, verify},
-    get_user::get_user,
-    register::register,
-};
+use routes::{get_user::get_user, register::register, ws::ws_handler};
 use state::AppState;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
 };
 use tokio::net::TcpListener;
 
@@ -27,14 +23,14 @@ async fn main() {
 
     let state = Arc::new(AppState {
         db: Mutex::new(connection),
-        challenges: Mutex::new(HashMap::new()),
+        online: Mutex::new(HashMap::new()),
+        next_connection_id: AtomicU64::new(0),
     });
 
     let app = Router::new()
         .route("/register", post(register))
-        .route("/auth/challenge", post(create_challenge))
-        .route("/auth/verify", post(verify))
         .route("/users/{public_key}", get(get_user))
+        .route("/ws", any(ws_handler))
         .with_state(state);
 
     let listener = TcpListener::bind("127.0.0.1:3000")
