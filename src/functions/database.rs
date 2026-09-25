@@ -13,5 +13,14 @@ pub fn init_database() -> Result<Connection, rusqlite::Error> {
         [],
     )?;
 
+    // Nicknames sind eindeutig, Groß-/Kleinschreibung wird ignoriert
+    connection.execute(
+        "
+        CREATE UNIQUE INDEX IF NOT EXISTS users_nickname_unique
+        ON users (nickname COLLATE NOCASE)
+        ",
+        [],
+    )?;
+
     Ok(connection)
 }

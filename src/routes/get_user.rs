@@ -1,17 +1,18 @@
 use crate::models::user::User;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Json,
 };
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub async fn get_user(
-    State(database): State<Arc<Mutex<Connection>>>,
+    State(state): State<Arc<AppState>>,
     Path(public_key): Path<String>,
 ) -> Result<Json<User>, StatusCode> {
-    let database = database
+    let database = state
+        .db
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

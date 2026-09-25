@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 axum = "0.8.9"
 ed25519-dalek = "3.0.0"
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
 hex = "0.4.3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
