@@ -1,28 +1,64 @@
-use crate::functions::validate_nickname::validate_nickname;
-use crate::models::user::User;
+use crate::functions::{client_ip::client_ip, validate_nickname::validate_nickname};
+use crate::models::protocol::REGISTER_CONTEXT;
 use crate::state::AppState;
-use axum::{extract::State, http::StatusCode, Json};
-use ed25519_dalek::VerifyingKey;
+use axum::{
+    extract::{ConnectInfo, State},
+    http::{HeaderMap, StatusCode},
+    Json,
+};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rusqlite::ErrorCode;
-use std::sync::Arc;
+use serde::Deserialize;
+use std::{net::SocketAddr, sync::Arc};
+
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    public_key: String,
+    nickname: String,
+    // Signatur über REGISTER_CONTEXT + Public Key (32 Bytes) + Nickname
+    signature: String,
+}
 
 pub async fn register(
     State(state): State<Arc<AppState>>,
-    Json(user): Json<User>,
+    ConnectInfo(address): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<RegisterRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    if !validate_nickname(&user.nickname) {
+    let ip = client_ip(address, &headers, &state.trusted_proxies);
+
+    if !state.register_limiter.try_acquire(ip) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    if !validate_nickname(&request.nickname) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let public_key_bytes = hex::decode(&user.public_key)
+    let public_key_bytes: [u8; 32] = hex::decode(&request.public_key)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let public_key_bytes: [u8; 32] = public_key_bytes
-        .try_into()
+    let signature_bytes = hex::decode(&request.signature)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    VerifyingKey::from_bytes(&public_key_bytes)
+    let signature = Signature::from_slice(&signature_bytes)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let signed_message = [
+        REGISTER_CONTEXT,
+        public_key_bytes.as_slice(),
+        request.nickname.as_bytes(),
+    ]
+        .concat();
+
+    verifying_key
+        .verify(&signed_message, &signature)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     let database = state
         .db
@@ -32,7 +68,9 @@ pub async fn register(
     database
         .execute(
             "INSERT INTO users (public_key, nickname) VALUES (?1, ?2)",
-            (&user.public_key, &user.nickname),
+            // Immer klein geschrieben speichern, damit derselbe Schlüssel
+            // nicht in zwei Schreibweisen registriert werden kann
+            (hex::encode(public_key_bytes), &request.nickname),
         )
         .map_err(|error| match error.sqlite_error_code() {
             // Nickname oder Public Key existiert bereits

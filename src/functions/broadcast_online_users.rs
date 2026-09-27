@@ -4,7 +4,7 @@ use std::sync::PoisonError;
 
 // Schickt allen verbundenen Clients die aktuelle Online-Liste
 pub fn broadcast_online_users(state: &AppState) {
-    let online = state
+    let mut online = state
         .online
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -20,10 +20,12 @@ pub fn broadcast_online_users(state: &AppState) {
 
     users.sort_by_key(|user| user.nickname.to_lowercase());
 
-    for user in online.values() {
-        // Fehler heißt nur: Verbindung wird gerade geschlossen
-        let _ = user.sender.send(ServerMessage::OnlineUsers {
+    // Clients, deren Puffer voll ist, werden entfernt. Dadurch fällt ihr
+    // Sender weg und die Verbindung beendet sich. Beim Aufräumen der
+    // Verbindung wird die Liste erneut verschickt.
+    online.retain(|_, user| {
+        user.deliver(ServerMessage::OnlineUsers {
             users: users.clone(),
-        });
-    }
+        })
+    });
 }

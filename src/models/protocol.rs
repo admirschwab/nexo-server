@@ -40,5 +40,9 @@ pub enum ClientMessage {
 // nie mit einer anderen Signatur des Clients verwechselt werden kann
 pub const AUTH_CONTEXT: &[u8] = b"nexo-auth-v1";
 
+// Kontext für die Signatur bei der Registrierung (Kontext + Public Key + Nickname).
+// Damit beweist der Client, dass er den privaten Schlüssel besitzt.
+pub const REGISTER_CONTEXT: &[u8] = b"nexo-register-v1";
+
 // Größere Payloads werden verworfen
 pub const MAX_PAYLOAD_LENGTH: usize = 16 * 1024;

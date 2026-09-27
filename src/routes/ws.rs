@@ -1,5 +1,6 @@
 use crate::functions::{
     broadcast_online_users::broadcast_online_users,
+    client_ip::client_ip,
     rate_limiter::RateLimiter,
     relay_message::relay_message,
 };
@@ -8,9 +9,10 @@ use crate::state::{AppState, OnlineUser};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        ConnectInfo, State,
     },
-    response::Response,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
@@ -20,25 +22,49 @@ use getrandom::{
 };
 use rusqlite::params;
 use std::{
+    net::SocketAddr,
     sync::{atomic::Ordering, Arc, PoisonError},
     time::Duration,
 };
-use tokio::{sync::mpsc, time::timeout};
+use tokio::{
+    sync::mpsc,
+    time::{interval, timeout, MissedTickBehavior},
+};
 
 // So lange hat der Client Zeit, die Challenge zu beantworten
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Nachrichten pro Verbindung: dauerhaft 5 pro Sekunde, kurzzeitig bis zu 20 am Stück
-const MESSAGES_PER_SECOND: u32 = 5;
+const MESSAGES_PER_SECOND: f64 = 5.0;
 const MESSAGE_BURST: u32 = 20;
 
 // Obergrenze für eine einzelne WebSocket-Nachricht
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 
+// So viele Nachrichten dürfen für einen Client höchstens warten.
+// Ist der Puffer voll, liest der Client nicht mehr und wird getrennt.
+const OUTBOX_CAPACITY: usize = 256;
+
+// Der Server schickt regelmäßig ein Ping. Kommt so lange gar nichts vom Client
+// (auch kein Pong), gilt die Verbindung als tot und der Nutzer als offline.
+const PING_INTERVAL: Duration = Duration::from_secs(20);
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
+
+// So lange darf das Schreiben einer Nachricht auf den Socket höchstens dauern
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
+    ConnectInfo(address): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> Response {
+    let ip = client_ip(address, &headers, &state.trusted_proxies);
+
+    if !state.connect_limiter.try_acquire(ip) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
     ws.max_message_size(MAX_MESSAGE_SIZE)
         .on_upgrade(move |socket| handle_socket(socket, state))
 }
@@ -50,7 +76,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     };
 
     let connection_id = state.next_connection_id.fetch_add(1, Ordering::Relaxed);
-    let (sender, mut receiver) = mpsc::unbounded_channel::<ServerMessage>();
+    let (sender, mut receiver) = mpsc::channel::<ServerMessage>(OUTBOX_CAPACITY);
 
     // Ist derselbe Nutzer schon verbunden, wird die alte Verbindung ersetzt.
     // Deren Sender wird dabei verworfen, wodurch sie sich selbst beendet.
@@ -72,18 +98,36 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     // Schreibt alle Nachrichten aus dem Channel auf den WebSocket
+    // und schickt zwischendurch Pings
     let mut writer = tokio::spawn(async move {
-        while let Some(message) = receiver.recv().await {
-            let Ok(text) = serde_json::to_string(&message) else {
-                continue;
+        let mut ping = interval(PING_INTERVAL);
+        ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        loop {
+            let message = tokio::select! {
+                message = receiver.recv() => {
+                    // None: Der Sender wurde verworfen (ersetzt oder getrennt)
+                    let Some(message) = message else {
+                        break;
+                    };
+
+                    let Ok(text) = serde_json::to_string(&message) else {
+                        continue;
+                    };
+
+                    Message::Text(text.into())
+                }
+                _ = ping.tick() => Message::Ping(Default::default()),
             };
 
-            if ws_sender.send(Message::Text(text.into())).await.is_err() {
-                break;
+            // Liest der Client nicht, bleibt send hängen: dann abbrechen
+            match timeout(WRITE_TIMEOUT, ws_sender.send(message)).await {
+                Ok(Ok(())) => {}
+                _ => break,
             }
         }
 
-        let _ = ws_sender.close().await;
+        let _ = timeout(WRITE_TIMEOUT, ws_sender.close()).await;
     });
 
     // Liest Nachrichten vom Client und leitet sie weiter
@@ -93,7 +137,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let mut reader = tokio::spawn(async move {
         let mut rate_limiter = RateLimiter::new(MESSAGE_BURST, MESSAGES_PER_SECOND);
 
-        while let Some(Ok(message)) = ws_receiver.next().await {
+        // Jede Nachricht vom Client (auch ein Pong) setzt den Timeout zurück
+        while let Ok(Some(Ok(message))) = timeout(CLIENT_TIMEOUT, ws_receiver.next()).await {
             match message {
                 Message::Text(text) => {
                     let Ok(ClientMessage::Send { to, payload }) = serde_json::from_str(&text)
