@@ -50,6 +50,11 @@ NEXO_TRUST_PROXY=true NEXO_TRUSTED_PROXIES=172.18.0.2 cargo run --release
 Only enable `NEXO_TRUST_PROXY` when the server is actually behind a proxy and not
 directly reachable from the internet.
 
+### Apache
+
+See [apache.md](apache.md) for a complete step-by-step setup: systemd service, Apache modules,
+virtual host (also under a sub-path like `https://api.example.com/nexo`), logging and testing.
+
 ### Caddy
 
 Caddy sets `X-Forwarded-For` and handles WebSockets automatically:
