@@ -23,7 +23,7 @@ use getrandom::{
 use rusqlite::params;
 use std::{
     net::SocketAddr,
-    sync::{Arc, PoisonError},
+    sync::{atomic::Ordering, Arc, PoisonError},
     time::Duration,
 };
 use tokio::{
@@ -70,10 +70,26 @@ pub async fn ws_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
-    let Some((public_key, nickname)) = authenticate(&mut socket, &state).await else {
+    let _guard = ConnectionGuard::new(state.clone());
+
+    let mut shutdown = state.shutdown.subscribe();
+
+    // Wird der Server während der Anmeldung beendet, wird sie abgebrochen
+    let authenticated = tokio::select! {
+        result = authenticate(&mut socket, &state) => result,
+        _ = shutdown.wait_for(|&shutting_down| shutting_down) => None,
+    };
+
+    let Some((public_key, nickname)) = authenticated else {
         let _ = socket.close().await;
         return;
     };
+
+    // Der Server wird gerade beendet
+    if *shutdown.borrow() {
+        let _ = socket.close().await;
+        return;
+    }
 
     // Zufällig statt fortlaufend: Ein Zähler würde allen Clients verraten,
     // wie viele Verbindungen der Server insgesamt hatte
@@ -187,6 +203,22 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     }
 
     broadcast_online_users(&state);
+}
+
+// Zählt offene Verbindungen, auch wenn der Handler vorzeitig endet
+struct ConnectionGuard(Arc<AppState>);
+
+impl ConnectionGuard {
+    fn new(state: Arc<AppState>) -> Self {
+        state.active_connections.fetch_add(1, Ordering::SeqCst);
+        Self(state)
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.active_connections.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 // Challenge-Response über den WebSocket.

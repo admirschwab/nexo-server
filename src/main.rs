@@ -10,6 +10,7 @@ use axum::{
 use functions::{
     database::init_database,
     rate_limiter::{IpRateLimiter, PRUNE_INTERVAL},
+    shutdown::{close_all_connections, shutdown_signal},
 };
 use routes::{register::register, unregister::unregister, ws::ws_handler};
 use state::AppState;
@@ -17,9 +18,9 @@ use std::{
     collections::HashMap,
     env,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
 };
-use tokio::{net::TcpListener, time::interval};
+use tokio::{net::TcpListener, sync::watch, time::interval};
 
 const DEFAULT_BIND: &str = "127.0.0.1:3000";
 
@@ -40,6 +41,8 @@ async fn main() {
         // Pro IP: bis zu 10 Verbindungsversuche am Stück, danach einer alle 5 Sekunden
         connect_limiter: IpRateLimiter::new(10, 1.0 / 5.0),
         trusted_proxies: trusted_proxies.clone(),
+        active_connections: AtomicUsize::new(0),
+        shutdown: watch::Sender::new(false),
     });
 
     // IP-Adressen aus den Rate-Limits regelmäßig vergessen, auch wenn keine
@@ -60,7 +63,7 @@ async fn main() {
         .route("/register", post(register))
         .route("/unregister", post(unregister))
         .route("/ws", any(ws_handler))
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = TcpListener::bind(&bind)
         .await
@@ -74,10 +77,21 @@ async fn main() {
         println!("Reverse proxy support: trusting X-Forwarded-For from {trusted_proxies:?}");
     }
 
-    // Die Adresse des Clients wird für die Rate-Limits pro IP gebraucht
+    // Die Adresse des Clients wird für die Rate-Limits pro IP gebraucht.
+    // Nach Ctrl+C werden keine neuen Anfragen mehr angenommen, laufende
+    // (z. B. eine Registrierung) dürfen noch fertig werden.
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("Server error");
+
+    // WebSocket-Verbindungen zählen nicht als laufende Anfragen: selbst schließen
+    close_all_connections(&state).await;
+
+    // Datenbank schließen (Nexo speichert ohnehin nur Public Key und Nickname)
+    drop(state);
+
+    println!("Nexo server stopped");
 }
 
 // NEXO_TRUST_PROXY=true schaltet die Unterstützung für einen Reverse Proxy ein.

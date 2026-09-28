@@ -4,9 +4,12 @@ use rusqlite::Connection;
 use std::{
     collections::HashMap,
     net::IpAddr,
-    sync::Mutex,
+    sync::{atomic::AtomicUsize, Mutex},
 };
-use tokio::sync::mpsc::{error::TrySendError, Sender};
+use tokio::sync::{
+    mpsc::{error::TrySendError, Sender},
+    watch,
+};
 
 pub struct OnlineUser {
     pub nickname: String,
@@ -35,4 +38,10 @@ pub struct AppState {
     pub connect_limiter: IpRateLimiter,
     // Proxys, deren X-Forwarded-For-Header geglaubt wird (leer: keinem)
     pub trusted_proxies: Vec<IpAddr>,
+    // Offene WebSocket-Verbindungen, damit beim Beenden gewartet werden kann,
+    // bis alle sauber geschlossen sind
+    pub active_connections: AtomicUsize,
+    // Wird beim Beenden auf true gesetzt. Verbindungen, die gerade noch bei der
+    // Anmeldung sind, brechen dann ab, neue werden nicht mehr angenommen.
+    pub shutdown: watch::Sender<bool>,
 }
