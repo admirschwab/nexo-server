@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct OnlineUserInfo {
     pub public_key: String,
     pub nickname: String,
-    // Ändert sich bei jeder neuen Verbindung. Daran erkennen Clients,
+    // Zufällig, neu bei jeder Verbindung. Daran erkennen Clients,
     // dass ein Partner neu verbunden ist und alte Chat-Schlüssel ungültig sind.
+    // Zufällig statt fortlaufend, damit sie nichts über andere Verbindungen verrät.
     pub connection_id: u64,
 }
 
@@ -43,6 +44,9 @@ pub const AUTH_CONTEXT: &[u8] = b"nexo-auth-v1";
 // Kontext für die Signatur bei der Registrierung (Kontext + Public Key + Nickname).
 // Damit beweist der Client, dass er den privaten Schlüssel besitzt.
 pub const REGISTER_CONTEXT: &[u8] = b"nexo-register-v1";
+
+// Kontext für die Signatur beim Löschen des Kontos (Kontext + Public Key)
+pub const UNREGISTER_CONTEXT: &[u8] = b"nexo-unregister-v1";
 
 // Größere Payloads werden verworfen
 pub const MAX_PAYLOAD_LENGTH: usize = 16 * 1024;

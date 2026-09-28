@@ -4,3 +4,4 @@ pub mod database;
 pub mod rate_limiter;
 pub mod relay_message;
 pub mod validate_nickname;
+pub mod verify_signature;

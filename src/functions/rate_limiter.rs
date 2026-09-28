@@ -2,11 +2,11 @@ use std::{
     collections::HashMap,
     net::IpAddr,
     sync::{Mutex, PoisonError},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
-// Ab so vielen Einträgen werden unbenutzte IP-Adressen aus der Tabelle entfernt
-const IP_TABLE_PRUNE_THRESHOLD: usize = 1000;
+// So oft wird die Tabelle nach IP-Adressen durchsucht, die vergessen werden können
+pub const PRUNE_INTERVAL: Duration = Duration::from_secs(30);
 
 // Token Bucket: Jede Aktion kostet ein Token. Das Guthaben füllt sich mit
 // `per_second` Tokens pro Sekunde wieder auf, höchstens bis `burst`.
@@ -54,11 +54,17 @@ impl RateLimiter {
     }
 }
 
-// Ein Token Bucket pro IP-Adresse
+// Ein Token Bucket pro IP-Adresse.
+// IP-Adressen liegen nur im Arbeitsspeicher und werden vergessen, sobald ihr
+// Bucket wieder voll ist, also sobald sie für das Limit keine Rolle mehr spielen.
 pub struct IpRateLimiter {
     burst: u32,
     per_second: f64,
-    limiters: Mutex<HashMap<IpAddr, RateLimiter>>,
+    table: Mutex<IpTable>,
+}
+
+struct IpTable {
+    limiters: HashMap<IpAddr, RateLimiter>,
 }
 
 impl IpRateLimiter {
@@ -66,23 +72,29 @@ impl IpRateLimiter {
         Self {
             burst,
             per_second,
-            limiters: Mutex::new(HashMap::new()),
+            table: Mutex::new(IpTable {
+                limiters: HashMap::new(),
+            }),
         }
     }
 
     pub fn try_acquire(&self, ip: IpAddr) -> bool {
-        let mut limiters = self
-            .limiters
+        self.table
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-
-        if limiters.len() >= IP_TABLE_PRUNE_THRESHOLD {
-            limiters.retain(|_, limiter| !limiter.is_idle());
-        }
-
-        limiters
+            .unwrap_or_else(PoisonError::into_inner)
+            .limiters
             .entry(ip)
             .or_insert_with(|| RateLimiter::new(self.burst, self.per_second))
             .try_acquire()
+    }
+
+    // Vergisst alle IP-Adressen, deren Bucket wieder voll ist.
+    // Wird regelmäßig im Hintergrund aufgerufen (siehe main.rs).
+    pub fn prune(&self) {
+        self.table
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .limiters
+            .retain(|_, limiter| !limiter.is_idle());
     }
 }

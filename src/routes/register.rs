@@ -1,4 +1,7 @@
-use crate::functions::{client_ip::client_ip, validate_nickname::validate_nickname};
+use crate::functions::{
+    client_ip::client_ip, validate_nickname::validate_nickname,
+    verify_signature::verify_signature,
+};
 use crate::models::protocol::REGISTER_CONTEXT;
 use crate::state::AppState;
 use axum::{
@@ -6,7 +9,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rusqlite::ErrorCode;
 use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
@@ -35,30 +37,12 @@ pub async fn register(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let public_key_bytes: [u8; 32] = hex::decode(&request.public_key)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or(StatusCode::BAD_REQUEST)?;
-
-    let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    let signature_bytes = hex::decode(&request.signature)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    let signature = Signature::from_slice(&signature_bytes)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    let signed_message = [
+    let public_key_bytes = verify_signature(
+        &request.public_key,
+        &request.signature,
         REGISTER_CONTEXT,
-        public_key_bytes.as_slice(),
         request.nickname.as_bytes(),
-    ]
-        .concat();
-
-    verifying_key
-        .verify(&signed_message, &signature)
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    )?;
 
     let database = state
         .db

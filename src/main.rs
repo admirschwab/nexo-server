@@ -4,19 +4,22 @@ mod routes;
 mod state;
 
 use axum::{
-    routing::{any, get, post},
+    routing::{any, post},
     Router,
 };
-use functions::{database::init_database, rate_limiter::IpRateLimiter};
-use routes::{get_user::get_user, register::register, ws::ws_handler};
+use functions::{
+    database::init_database,
+    rate_limiter::{IpRateLimiter, PRUNE_INTERVAL},
+};
+use routes::{register::register, unregister::unregister, ws::ws_handler};
 use state::AppState;
 use std::{
     collections::HashMap,
     env,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, time::interval};
 
 const DEFAULT_BIND: &str = "127.0.0.1:3000";
 
@@ -32,7 +35,6 @@ async fn main() {
     let state = Arc::new(AppState {
         db: Mutex::new(connection),
         online: Mutex::new(HashMap::new()),
-        next_connection_id: AtomicU64::new(0),
         // Pro IP: bis zu 5 Registrierungen am Stück, danach eine pro Minute
         register_limiter: IpRateLimiter::new(5, 1.0 / 60.0),
         // Pro IP: bis zu 10 Verbindungsversuche am Stück, danach einer alle 5 Sekunden
@@ -40,9 +42,23 @@ async fn main() {
         trusted_proxies: trusted_proxies.clone(),
     });
 
+    // IP-Adressen aus den Rate-Limits regelmäßig vergessen, auch wenn keine
+    // neuen Anfragen kommen
+    let prune_state = state.clone();
+
+    tokio::spawn(async move {
+        let mut ticker = interval(PRUNE_INTERVAL);
+
+        loop {
+            ticker.tick().await;
+            prune_state.register_limiter.prune();
+            prune_state.connect_limiter.prune();
+        }
+    });
+
     let app = Router::new()
         .route("/register", post(register))
-        .route("/users/{public_key}", get(get_user))
+        .route("/unregister", post(unregister))
         .route("/ws", any(ws_handler))
         .with_state(state);
 

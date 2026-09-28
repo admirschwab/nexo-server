@@ -23,7 +23,7 @@ use getrandom::{
 use rusqlite::params;
 use std::{
     net::SocketAddr,
-    sync::{atomic::Ordering, Arc, PoisonError},
+    sync::{Arc, PoisonError},
     time::Duration,
 };
 use tokio::{
@@ -75,7 +75,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         return;
     };
 
-    let connection_id = state.next_connection_id.fetch_add(1, Ordering::Relaxed);
+    // Zufällig statt fortlaufend: Ein Zähler würde allen Clients verraten,
+    // wie viele Verbindungen der Server insgesamt hatte
+    let connection_id = UnwrapErr(SysRng).next_u64();
     let (sender, mut receiver) = mpsc::channel::<ServerMessage>(OUTBOX_CAPACITY);
 
     // Ist derselbe Nutzer schon verbunden, wird die alte Verbindung ersetzt.

@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use std::{
     collections::HashMap,
     net::IpAddr,
-    sync::{atomic::AtomicU64, Mutex},
+    sync::Mutex,
 };
 use tokio::sync::mpsc::{error::TrySendError, Sender};
 
@@ -31,7 +31,6 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     // Aktuell verbundene Nutzer, Schlüssel ist der Public Key (hex)
     pub online: Mutex<HashMap<String, OnlineUser>>,
-    pub next_connection_id: AtomicU64,
     pub register_limiter: IpRateLimiter,
     pub connect_limiter: IpRateLimiter,
     // Proxys, deren X-Forwarded-For-Header geglaubt wird (leer: keinem)
