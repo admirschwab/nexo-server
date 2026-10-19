@@ -1,4 +1,5 @@
 pub mod broadcast_online_users;
+pub mod check_client_version;
 pub mod client_ip;
 pub mod database;
 pub mod rate_limiter;

@@ -74,6 +74,12 @@ sudo systemctl status nexo-server
 
 On `systemctl stop`, the server closes all connections cleanly before it exits.
 
+To require a minimum client version (see [README.md](README.md#minimum-client-version)):
+
+```sh
+echo "0.2.0" | sudo -u nexo tee /var/lib/nexo/min_client_version
+```
+
 ## 3. Enable the Apache modules
 
 ```sh

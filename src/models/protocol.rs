@@ -32,7 +32,12 @@ pub enum ServerMessage {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    Auth { public_key: String, signature: String },
+    // "version" ist die Version des Clients (ab 0.2.0, ältere schicken keine)
+    Auth {
+        public_key: String,
+        signature: String,
+        version: Option<String>,
+    },
     // "payload" ist für den Server undurchsichtig (Ende-zu-Ende verschlüsselt)
     Send { to: String, payload: String },
 }

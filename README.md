@@ -22,6 +22,23 @@ All settings are environment variables:
 | `NEXO_TRUST_PROXY`     | `false`          | Read the client IP from `X-Forwarded-For` (see below)          |
 | `NEXO_TRUSTED_PROXIES` | `127.0.0.1,::1`  | Comma-separated proxy IPs whose `X-Forwarded-For` is trusted   |
 
+## Minimum client version
+
+To make users update their client, put the oldest version you still accept into a file
+`min_client_version` in the server's working directory (next to `nexo.db`):
+
+```sh
+echo "0.2.0" > min_client_version
+```
+
+Older clients cannot log in or register. They are shown the required version and the
+command to install the latest release. Account deletion (`nexo unregister`) always works.
+
+The file is read on every login, so no restart is needed. Without the file, every version is
+accepted. Clients before 0.2.0 do not send their version and are rejected as soon as the file exists.
+
+Only raise the version **after** the new release is published, otherwise nobody can update.
+
 ## Running behind a reverse proxy
 
 The server does not handle TLS itself. To make it reachable as `https://` / `wss://`,

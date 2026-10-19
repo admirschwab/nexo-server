@@ -1,5 +1,6 @@
 use crate::functions::{
     broadcast_online_users::broadcast_online_users,
+    check_client_version::check_client_version,
     client_ip::client_ip,
     rate_limiter::RateLimiter,
     relay_message::relay_message,
@@ -246,10 +247,18 @@ async fn authenticate(
     let Ok(ClientMessage::Auth {
         public_key,
         signature,
+        version,
     }) = serde_json::from_str(&text)
     else {
         return None;
     };
+
+    // Zu alte Clients werden abgewiesen, noch bevor die Signatur geprüft wird
+    if let Err(reason) = check_client_version(version.as_deref()) {
+        send(socket, &ServerMessage::AuthError { reason }).await;
+
+        return None;
+    }
 
     match verify_auth(state, &public_key, &signature, &challenge) {
         Ok(nickname) => {

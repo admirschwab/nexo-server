@@ -1,12 +1,13 @@
 use crate::functions::{
-    client_ip::client_ip, validate_nickname::validate_nickname,
-    verify_signature::verify_signature,
+    check_client_version::check_client_version, client_ip::client_ip,
+    validate_nickname::validate_nickname, verify_signature::verify_signature,
 };
 use crate::models::protocol::REGISTER_CONTEXT;
 use crate::state::AppState;
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use rusqlite::ErrorCode;
@@ -19,6 +20,8 @@ pub struct RegisterRequest {
     nickname: String,
     // Signatur über REGISTER_CONTEXT + Public Key (32 Bytes) + Nickname
     signature: String,
+    // Version des Clients (ab 0.2.0, ältere schicken keine)
+    version: Option<String>,
 }
 
 pub async fn register(
@@ -26,13 +29,22 @@ pub async fn register(
     ConnectInfo(address): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<RegisterRequest>,
-) -> Result<StatusCode, StatusCode> {
+) -> Response {
     let ip = client_ip(address, &headers, &state.trusted_proxies);
 
     if !state.register_limiter.try_acquire(ip) {
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
 
+    // Zu alte Clients bekommen die Meldung für den Nutzer als Text zurück
+    if let Err(reason) = check_client_version(request.version.as_deref()) {
+        return (StatusCode::UPGRADE_REQUIRED, reason).into_response();
+    }
+
+    store_user(&state, &request).into_response()
+}
+
+fn store_user(state: &AppState, request: &RegisterRequest) -> Result<StatusCode, StatusCode> {
     if !validate_nickname(&request.nickname) {
         return Err(StatusCode::BAD_REQUEST);
     }
