@@ -40,7 +40,8 @@ and forwards WebSockets.
 
 * **Apache:** [apache.md](apache.md) is a complete step-by-step guide: systemd service, Apache
   modules, virtual host (also under a sub-path like `https://api.example.com/nexo`), logging and testing.
-* **Caddy** and **nginx:** see [Reverse proxy](#reverse-proxy) below.
+* **nginx:** [nginx.md](nginx.md) is the same guide for nginx.
+* **Caddy:** see [Reverse proxy](#reverse-proxy) below.
 
 Clients then use the public address, e.g. `https://chat.example.com`. It is asked for during
 `nexo register` and can be changed later with `nexo server <url>`.
@@ -141,6 +142,8 @@ server {
     }
 }
 ```
+
+For the full setup (service, sub-path, logging, testing) see [nginx.md](nginx.md).
 
 Most proxies write every request with IP address and time to their access log. That is exactly the
 metadata Nexo avoids, so consider turning it off for Nexo ([apache.md](apache.md#5-logging) shows how).
